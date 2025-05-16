@@ -88,7 +88,7 @@ def extrair_conteudo_docx(uploaded_file):
         st.error(f"Erro crítico ao ler DOCX: {e_doc_read}")
         return "", []
 
-def analisar_documento_com_gemini(texto_doc, tabelas_info_list):
+def analisar_documento_com_gemini(texto_doc, tabelas_info_list, show_debug_areas=False): # Adicionado show_debug_areas
     api_key = get_gemini_api_key()
     if not api_key: 
         st.warning("Chave API Gemini não configurada. Sugestões da IA desabilitadas.")
@@ -96,34 +96,32 @@ def analisar_documento_com_gemini(texto_doc, tabelas_info_list):
     try:
         genai.configure(api_key=api_key)
         safety_settings = [{"category": c,"threshold": "BLOCK_NONE"} for c in ["HARM_CATEGORY_HARASSMENT","HARM_CATEGORY_HATE_SPEECH","HARM_CATEGORY_SEXUALLY_EXPLICIT","HARM_CATEGORY_DANGEROUS_CONTENT"]]
-        # Para testar o erro 400, você pode comentar a linha abaixo e testar sem safety_settings:
-        # model = genai.GenerativeModel(model_name="gemini-1.5-flash-latest") 
         model = genai.GenerativeModel(model_name="gemini-1.5-flash-latest", safety_settings=safety_settings)
         
         tabelas_prompt_str = ""
-        # TESTE: Enviar apenas a primeira tabela, ou nenhuma.
-        # tabelas_para_prompt = tabelas_info_list[:1] # Apenas a primeira tabela
-        tabelas_para_prompt = [] # NENHUMA TABELA PARA TESTE INICIAL DO TEXTO
+        # TESTE: Enviar apenas uma amostra muito pequena de tabelas para reduzir o prompt
+        tabelas_para_prompt = tabelas_info_list[:1] # Apenas a primeira tabela
+        # tabelas_para_prompt = [] # Ou nenhuma tabela para testar só com texto
 
-        for t_info in tabelas_para_prompt: # Modificado para usar tabelas_para_prompt
+        for t_info in tabelas_para_prompt: 
             df, nome_t, id_t = t_info["dataframe"], t_info["nome"], t_info["id"]
-            sample_df = df.head(1).iloc[:, :min(1, len(df.columns))] # Amostra MÍNIMA
+            sample_df = df.head(1).iloc[:, :min(2, len(df.columns))] # Amostra MÍNIMA: 1 linha, até 2 colunas
             md_table = ""
             try: md_table = sample_df.to_markdown(index=False)
             except: md_table = sample_df.to_string(index=False) 
             
-            colunas_para_mostrar_tipos = df.columns.tolist()[:min(2, len(df.columns))] # Menos colunas
+            colunas_para_mostrar_tipos = df.columns.tolist()[:min(3, len(df.columns))] # Tipos de até 3 colunas
             col_types_list = [f"'{col_name_prompt}' (tipo: {str(df[col_name_prompt].dtype)})" for col_name_prompt in colunas_para_mostrar_tipos]
             col_types_str = ", ".join(col_types_list)
             
             tabelas_prompt_str += f"\n--- Tabela '{nome_t}' (ID: {id_t}) ---\nColunas e tipos (amostra): {col_types_str}\nAmostra dados:\n{md_table}\n"
         
-        text_limit = 5000 # COMECE COM UM LIMITE BEM PEQUENO PARA TESTAR
+        text_limit = 5000 # LIMITE BEM PEQUENO PARA TEXTO
         prompt_text = texto_doc[:text_limit] + ("\n[TEXTO TRUNCADO...]" if len(texto_doc) > text_limit else "")
         # Para testar SÓ AS INSTRUÇÕES:
-        # prompt_text = "Texto de exemplo curto e simples sobre vendas de produtos."
-        # tabelas_prompt_str = "---\nTabela Exemplo (ID:ex_tab_1)\nColunas e tipos: 'Produto' (object), 'Vendas' (int64)\nAmostra:\n| Produto   |   Vendas |\n|:----------|---------:|\n| Produto A |      100 |\n---"
-        
+        # prompt_text = "Texto de exemplo curto sobre vendas de carros."
+        # tabelas_prompt_str = "---\nTabela Carros (ID:car_tab_1)\nColunas e tipos: 'Modelo' (object), 'Vendas_2024' (int64)\nAmostra:\n| Modelo   |   Vendas_2024 |\n|:----------|---------:|\n| Modelo X |      150 |\n---"
+
         prompt = f"""
         Você é um assistente de análise de dados. Analise o texto e as tabelas.
         [TEXTO]{prompt_text}[FIM TEXTO]
@@ -146,11 +144,16 @@ def analisar_documento_com_gemini(texto_doc, tabelas_info_list):
         4.  SWOT: Se tabela compara SWOTs, gere "lista_swot" INDIVIDUAL por player.
         Retorne APENAS a lista JSON válida.
         """
-        with st.spinner("🤖 Gemini analisando... (Pode levar alguns instantes)"):
-            st.text_area("Debug: Prompt ENVIADO ao Gemini (para erro 400)", prompt, height=300) # DESCOMENTADO
+        if show_debug_areas: # Controla exibição dos text_area de debug
+            st.text_area("Debug: Prompt ENVIADO ao Gemini (para erro 400)", prompt, height=300, key="debug_prompt_gemini")
+        
+        with st.spinner("🤖 Gemini analisando..."):
             response = model.generate_content(prompt)
         cleaned_text = response.text.strip().lstrip("```json").rstrip("```").strip()
-        st.text_area("Debug: Resposta BRUTA do Gemini (para erro 400)", cleaned_text, height=200) # DESCOMENTADO
+
+        if show_debug_areas:
+            st.text_area("Debug: Resposta BRUTA do Gemini (para erro 400)", cleaned_text, height=200, key="debug_response_gemini")
+        
         sugestoes = json.loads(cleaned_text)
         if isinstance(sugestoes, list) and all(isinstance(item, dict) for item in sugestoes):
              st.success(f"{len(sugestoes)} sugestões recebidas do Gemini!")
@@ -162,12 +165,11 @@ def analisar_documento_com_gemini(texto_doc, tabelas_info_list):
         return []
     except Exception as e: 
         st.error(f"Erro na comunicação com Gemini: {e}")
-        st.text(traceback.format_exc()) # Mostra traceback completo para erro 400
+        # st.text(traceback.format_exc()) # Descomentar para debug MUITO detalhado do erro da API
         return []
 
-# --- Funções de Renderização Específicas ---
+# --- Funções de Renderização ---
 def render_kpis(kpi_sugestoes):
-    # ... (código da função render_kpis da última versão) ...
     if kpi_sugestoes:
         num_kpis = len(kpi_sugestoes); kpi_cols = st.columns(min(num_kpis, 4)) 
         for i, kpi_sug in enumerate(kpi_sugestoes):
@@ -177,7 +179,6 @@ def render_kpis(kpi_sugestoes):
         st.divider()
 
 def render_swot_card(titulo_completo_swot, swot_data):
-    # ... (código da função render_swot_card da última versão) ...
     st.subheader(f"{titulo_completo_swot}") 
     col1, col2 = st.columns(2)
     swot_map = {"forcas": ("Forças 💪", col1), "fraquezas": ("Fraquezas 📉", col1), 
@@ -194,7 +195,6 @@ def render_swot_card(titulo_completo_swot, swot_data):
     st.markdown("<hr style='margin-top: 10px; margin-bottom: 20px;'>", unsafe_allow_html=True)
 
 def render_plotly_chart(item_config, df_plot_input):
-    # ... (código da função render_plotly_chart da última versão) ...
     if df_plot_input is None:
         st.warning(f"Dados não disponíveis para o gráfico '{item_config.get('titulo', 'Sem Título')}'.")
         return False
@@ -241,12 +241,15 @@ st.sidebar.title("✨ Navegação"); pagina_opcoes_sidebar = ["Dashboard Princip
 st.session_state.pagina_selecionada = st.sidebar.radio(
     "Selecione:", pagina_opcoes_sidebar, 
     index=pagina_opcoes_sidebar.index(st.session_state.pagina_selecionada), 
-    key="nav_radio_key_gen_final_v11" 
+    key="nav_radio_key_gen_final_v12" 
 )
-st.sidebar.divider(); uploaded_file_sidebar = st.sidebar.file_uploader("Selecione DOCX", type="docx", key="uploader_sidebar_key_gen_final_v11")
-st.session_state.debug_checkbox_key = st.sidebar.checkbox("Mostrar Informações de Depuração", 
+st.sidebar.divider(); uploaded_file_sidebar = st.sidebar.file_uploader("Selecione DOCX", type="docx", key="uploader_sidebar_key_gen_final_v12")
+# O valor do checkbox de debug é controlado pelo session_state
+show_debug_info_value = st.sidebar.checkbox("Mostrar Informações de Depuração", 
                                     value=st.session_state.debug_checkbox_key, 
-                                    key="debug_cb_sidebar_key_gen_final_v11") 
+                                    key="debug_cb_sidebar_key_gen_final_v12") 
+st.session_state.debug_checkbox_key = show_debug_info_value
+
 
 if uploaded_file_sidebar:
     if st.session_state.nome_arquivo_atual != uploaded_file_sidebar.name: 
@@ -256,7 +259,8 @@ if uploaded_file_sidebar:
             texto_doc_main, tabelas_doc_main = extrair_conteudo_docx(uploaded_file_sidebar)
             st.session_state.conteudo_docx = {"texto": texto_doc_main, "tabelas": tabelas_doc_main}
             if texto_doc_main or tabelas_doc_main:
-                sugestoes_main = analisar_documento_com_gemini(texto_doc_main, tabelas_doc_main)
+                # Passa o estado do checkbox de debug para a função da LLM
+                sugestoes_main = analisar_documento_com_gemini(texto_doc_main, tabelas_doc_main, show_debug_areas=st.session_state.debug_checkbox_key)
                 st.session_state.sugestoes_gemini = sugestoes_main
                 temp_config_init_main = {}
                 for i_init_main,s_init_main in enumerate(sugestoes_main): 
@@ -271,7 +275,7 @@ if uploaded_file_sidebar:
             for t_info_dbg_main in st.session_state.conteudo_docx["tabelas"]:
                 st.write(f"ID: {t_info_dbg_main['id']}, Nome: {t_info_dbg_main['nome']}")
                 try: st.dataframe(t_info_dbg_main['dataframe'].head().astype(str).fillna("-")) 
-                except Exception: st.text(f"Head:\n{t_info_dbg_main['dataframe'].head().to_string(na_rep='-')}")
+                except: st.text(f"Head:\n{t_info_dbg_main['dataframe'].head().to_string(na_rep='-')}")
                 st.write("Tipos:", t_info_dbg_main['dataframe'].dtypes.to_dict())
 
     if st.session_state.sugestoes_gemini:
@@ -386,16 +390,15 @@ elif st.session_state.pagina_selecionada == "Análise SWOT Detalhada":
 
 if uploaded_file_sidebar is None and st.session_state.nome_arquivo_atual is not None:
     keys_to_clear_on_remove = list(st.session_state.keys())
-    preserved_widget_keys_on_remove = [ # Chaves dos widgets principais que não devem ser limpas
-        "nav_radio_key_gen_final_v11", 
-        "uploader_sidebar_key_gen_final_v11", 
-        "debug_cb_sidebar_key_gen_final_v11"
+    preserved_widget_keys_on_remove = [
+        "nav_radio_key_gen_final_v12", # Atualize para as chaves únicas usadas
+        "uploader_sidebar_key_gen_final_v12", 
+        "debug_cb_sidebar_key_gen_final_v12" 
     ] 
     if "sugestoes_gemini" in st.session_state: 
         for sug_key_cfg_clear in st.session_state.sugestoes_gemini: # Itera sobre cópia ou usa .get
             s_id_preserve_val_clear = sug_key_cfg_clear.get('id')
             if s_id_preserve_val_clear:
-                # Adiciona chaves dos widgets da sidebar de configuração que são gerados dinamicamente
                 preserved_widget_keys_on_remove.extend([f"acc_loop_gen_{s_id_preserve_val_clear}", f"tit_loop_gen_{s_id_preserve_val_clear}"])
             
     for key_cl_remove in keys_to_clear_on_remove:
@@ -403,11 +406,10 @@ if uploaded_file_sidebar is None and st.session_state.nome_arquivo_atual is not 
             if key_cl_remove in st.session_state: # Verifica se a chave ainda existe antes de deletar
                 del st.session_state[key_cl_remove]
     
-    # Re-inicializa os estados principais da aplicação para um novo ciclo
     for k_reinit_main, dv_reinit_main in [("sugestoes_gemini",[]),("config_sugestoes",{}),
                                 ("conteudo_docx",{"texto":"","tabelas":[]}),
                                 ("nome_arquivo_atual",None),
                                 ("debug_checkbox_key",False), 
                                 ("pagina_selecionada","Dashboard Principal")]:
-        st.session_state.setdefault(k_reinit_main, dv_reinit_main) # Usa setdefault para não sobrescrever se já existir
+        st.session_state.setdefault(k_reinit_main, dv_reinit_main)
     st.rerun()
