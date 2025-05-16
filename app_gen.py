@@ -14,10 +14,20 @@ import re
 
 # --- 1. Configuração da Ch.head(1).iloc[:, :min(3, len(df.columns))] # Apenas 1 linha,ave da API do Gemini ---
 def get_gemini_api_key():
-    try: return st.secrets["GOOGLE_API_KEY"]
+    try: 
+        return st.secrets["GOOGLE_API_KEY"] # <<<<< CORRIGIDO: Apenas o nome da chave
     except (FileNotFoundError, KeyError): 
         api_key = os.environ.get("GOOGLE_API_KEY")
         return api_key if api_key else None
+    except Exception as e: # Captura outros possíveis erros ao acessar secrets
+        # st.error(f"Erro ao tentar acessar a chave da API do Gemini dos segredos: {e}") # Opcional: logar o erro
+        # Tenta pegar da variável de ambiente como fallback se secrets falhar por outro motivo
+        api_key = os.environ.get("GOOGLE_API_KEY")
+        if api_key:
+            # st.info("Chave da API do Gemini carregada da variável de ambiente após falha nos segredos.")
+            return api_key
+        # st.warning("Chave da API do Gemini não encontrada nos segredos nem nas variáveis de ambiente.") # Movido para a função que usa a chave
+        return None
 
 # --- 2. Fun 3 colunas de amostra
     colunas_para_mostrar_tipos = df.columns.tolist()[:min(3, len(df.columns))] # Apenas os 3 primeiros tipos de coluna
