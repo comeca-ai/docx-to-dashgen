@@ -178,8 +178,8 @@ def render_kpis(kpi_sugestoes):
                 st.metric(label=kpi_sug.get("titulo","KPI"),value=str(params.get("valor","N/A")),delta=delta_val if delta_val else None,help=params.get("descricao"))
         st.divider()
 
-def render_swot_card(titulo_completo_swot, swot_data):
-    st.subheader(f"{titulo_completo_swot}") 
+def render_swot_card(titulo_completo_swot, swot_data, card_key_prefix=None):
+    st.subheader(f"{titulo_completo_swot}")
     col1, col2 = st.columns(2)
     swot_map = {"forcas": ("Forças 💪", col1), "fraquezas": ("Fraquezas 📉", col1), 
                 "oportunidades": ("Oportunidades 🚀", col2), "ameacas": ("Ameaças ⚠️", col2)}
