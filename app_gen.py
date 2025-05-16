@@ -17,6 +17,7 @@ def get_gemini_api_key():
 
 # --- 2. Funções de Processamento do Documento e Interação com Gemini ---
 def parse_value_for_numeric(val_str_in):
+    # ... (código da função parse_value_for_numeric da última versão) ...
     if pd.isna(val_str_in) or str(val_str_in).strip() == '': return None
     text = str(val_str_in).strip()
     is_negative_paren = text.startswith('(') and text.endswith(')')
@@ -33,6 +34,7 @@ def parse_value_for_numeric(val_str_in):
     return None
 
 def extrair_conteudo_docx(uploaded_file):
+    # ... (código da função extrair_conteudo_docx da última versão) ...
     try:
         document = Document(uploaded_file)
         textos = [p.text for p in document.paragraphs if p.text.strip()]
@@ -45,11 +47,9 @@ def extrair_conteudo_docx(uploaded_file):
                     p_text = "".join(node.text for node in prev_el.xpath('.//w:t')).strip()
                     if p_text and len(p_text) < 80: nome_tabela = p_text.replace(":", "").strip()[:70] 
             except Exception: pass
-            
             if len(table_obj.rows) > 0:
                 header_cells = [cell.text.strip().replace("\n", " ") for cell in table_obj.rows[0].cells]
                 keys = [key if key else f"Col{c_idx+1}" for c_idx, key in enumerate(header_cells)]
-
                 for r_idx, row in enumerate(table_obj.rows):
                     if r_idx == 0: continue 
                     cells = [c.text.strip() for c in row.cells]
@@ -58,7 +58,6 @@ def extrair_conteudo_docx(uploaded_file):
                         for k_idx, key_name in enumerate(keys):
                             row_dict[key_name] = cells[k_idx] if k_idx < len(cells) else None
                         data_rows.append(row_dict)
-            
             if data_rows:
                 try:
                     df = pd.DataFrame(data_rows)
@@ -76,17 +75,14 @@ def extrair_conteudo_docx(uploaded_file):
                                 df[col] = dt_series
                             else: df[col] = original_series.astype(str).fillna('')
                         except Exception: df[col] = original_series.astype(str).fillna('')
-                    
                     for col in df.columns: 
-                        if df[col].dtype == 'object':
-                            df[col] = df[col].astype(str).fillna('')
+                        if df[col].dtype == 'object': df[col] = df[col].astype(str).fillna('')
                     tabelas_data.append({"id": f"doc_tabela_{i+1}", "nome": nome_tabela, "dataframe": df})
                 except Exception as e_df_proc:
                     st.warning(f"Não foi possível processar DataFrame para tabela '{nome_tabela}': {e_df_proc}")
         return "\n\n".join(textos), tabelas_data
     except Exception as e_doc_read: 
-        st.error(f"Erro crítico ao ler DOCX: {e_doc_read}")
-        return "", []
+        st.error(f"Erro crítico ao ler DOCX: {e_doc_read}"); return "", []
 
 def analisar_documento_com_gemini(texto_doc, tabelas_info_list):
     api_key = get_gemini_api_key()
@@ -99,48 +95,50 @@ def analisar_documento_com_gemini(texto_doc, tabelas_info_list):
         model = genai.GenerativeModel(model_name="gemini-1.5-flash-latest", safety_settings=safety_settings)
         
         tabelas_prompt_str = ""
-        for t_info in tabelas_info_list:
-            df, nome_t, id_t = t_info["dataframe"], t_info["nome"], t_info["id"]
-            sample_df = df.head(3).iloc[:, :min(5, len(df.columns))] 
-            md_table = ""
-            try: md_table = sample_df.to_markdown(index=False)
-            except: md_table = sample_df.to_string(index=False) 
-            
-            colunas_para_mostrar_tipos = df.columns.tolist()[:min(8, len(df.columns))]
-            col_types_list = [f"'{col_name_prompt}' (tipo: {str(df[col_name_prompt].dtype)})" for col_name_prompt in colunas_para_mostrar_tipos]
-            col_types_str = ", ".join(col_types_list)
-            
-            tabelas_prompt_str += f"\n--- Tabela '{nome_t}' (ID para referência: {id_t}) ---\n"
-            tabelas_prompt_str += f"Colunas e tipos (amostra de até 8 colunas): {col_types_str}\n"
-            tabelas_prompt_str += f"Amostra de dados (primeiras 3 linhas, até 5 colunas):\n{md_table}\n"
+        if tabelas_info_list: # Processa tabelas apenas se a lista não for vazia
+            for t_info in tabelas_info_list[:2]: # LIMITA A 2 TABELAS PARA DEBUG DO ERRO 400
+                df, nome_t, id_t = t_info["dataframe"], t_info["nome"], t_info["id"]
+                sample_df = df.head(1).iloc[:, :min(2, len(df.columns))] # Amostra BEM pequena
+                md_table = ""
+                try: md_table = sample_df.to_markdown(index=False)
+                except: md_table = sample_df.to_string(index=False) 
+                
+                colunas_para_mostrar_tipos = df.columns.tolist()[:min(3, len(df.columns))] # Menos colunas nos tipos
+                col_types_list = [f"'{col_name_prompt}' (tipo: {str(df[col_name_prompt].dtype)})" for col_name_prompt in colunas_para_mostrar_tipos]
+                col_types_str = ", ".join(col_types_list)
+                
+                tabelas_prompt_str += f"\n--- Tabela '{nome_t}' (ID: {id_t}) ---\nColunas e tipos (amostra): {col_types_str}\nAmostra dados:\n{md_table}\n"
         
-        text_limit = 45000 
+        text_limit = 10000 # LIMITE DE TEXTO BEM REDUZIDO PARA DEBUG DO ERRO 400
         prompt_text = texto_doc[:text_limit] + ("\n[TEXTO TRUNCADO...]" if len(texto_doc) > text_limit else "")
         
-        prompt = f"""Você é um assistente de análise de dados. Analise o texto e as tabelas.
-[TEXTO]{prompt_text}[FIM TEXTO]
-[TABELAS]{tabelas_prompt_str}[FIM TABELAS]
+        prompt = f"""
+        Você é um assistente de análise de dados. Analise o texto e as tabelas.
+        [TEXTO]{prompt_text}[FIM TEXTO]
+        [TABELAS]{tabelas_prompt_str}[FIM TABELAS]
 
-Gere lista JSON de sugestões de visualizações. Objeto DEVE ter: "id", "titulo", "tipo_sugerido" ("kpi", "tabela_dados", "lista_swot", "grafico_barras", "grafico_pizza", "grafico_linha", "grafico_dispersao", "grafico_barras_agrupadas"), "fonte_id" (ID tabela ou "texto_descricao_fonte"), "parametros" (objeto JSON), "justificativa".
-Para "parametros":
-- "kpi": {{"valor": "ValorKPI", "delta": "Mudança", "descricao": "Contexto"}}
-- "tabela_dados": Para TABELA EXISTENTE: {{"id_tabela_original": "ID_Tabela"}}. Para DADOS DO TEXTO: {{"dados": [{{"Coluna1": "ValorA1"}}, ...], "colunas_titulo": ["Título Col1"]}}
-- "lista_swot": {{"forcas": ["F1"], "fraquezas": ["Fr1"], "oportunidades": ["Op1"], "ameacas": ["Am1"]}} (Listas de strings).
-- Gráficos de TABELA ("barras", "linha", "dispersao"): {{"eixo_x": "NOME_COL_X", "eixo_y": "NOME_COL_Y"}} (Y numérico).
-- Gráficos de PIZZA de TABELA: {{"categorias": "NOME_COL_CAT", "valores": "NOME_COL_VAL_NUM"}} (Valores numéricos).
-- Gráficos com DADOS EXTRAÍDOS DO TEXTO ("barras", "pizza", etc.): {{"dados": [{{"NomeEixoX": "CatA", "NomeEixoY": ValNumA}}, ...], "eixo_x": "NomeEixoX", "eixo_y": "NomeEixoY"}} (Valores DEVEM ser numéricos).
-- "grafico_barras_agrupadas": Se de TABELA: {{"eixo_x": "COL_PRINCIPAL", "eixo_y": "COL_VALOR_NUM", "cor_agrupamento": "COL_SUB_CAT"}}. Se DADOS EXTRAÍDOS: {{"dados": [{{"CatPrincipal": "A", "SubCat": "X", "Valor": 10}}, ...], "eixo_x": "CatPrincipal", "eixo_y": "Valor", "cor_agrupamento": "SubCat"}}.
-
-INSTRUÇÕES CRÍTICAS:
-1.  NOMES DE COLUNAS: Para gráficos de TABELA, use os NOMES EXATOS das colunas.
-2.  DADOS NUMÉRICOS: Se coluna de valor de TABELA não for numérica, NÃO sugira gráfico que precise de número para ela, A MENOS que extraia valor numérico dela (ex: '70%' -> 70.0; '70% - 86%' -> 70.0). Se extrair do texto, coloque em "dados", garanta valores numéricos.
-3.  COBERTURA GEOGRÁFICA (Player, Cidades): Se lista, sugira "tabela_dados" com "dados" nos "parametros" e "colunas_titulo". Não "mapa".
-4.  SWOT: Se tabela compara SWOTs, gere "lista_swot" INDIVIDUAL por player.
-Retorne APENAS a lista JSON válida.""" # String multilinha fechada corretamente
-
+        Gere lista JSON de sugestões de visualizações. Objeto DEVE ter: "id", "titulo", "tipo_sugerido" ("kpi", "tabela_dados", "lista_swot", "grafico_barras", "grafico_pizza", "grafico_linha", "grafico_dispersao", "grafico_barras_agrupadas"), "fonte_id" (ID tabela ou "texto_descricao_fonte"), "parametros" (objeto JSON), "justificativa".
+        Para "parametros":
+        - "kpi": {{"valor": "ValorKPI", "delta": "Mudança", "descricao": "Contexto"}}
+        - "tabela_dados": Para TABELA EXISTENTE: {{"id_tabela_original": "ID_Tabela"}}. Para DADOS DO TEXTO: {{"dados": [{{"Coluna1": "ValorA1"}}, ...], "colunas_titulo": ["Título Col1"]}}
+        - "lista_swot": {{"forcas": ["F1"], "fraquezas": ["Fr1"], "oportunidades": ["Op1"], "ameacas": ["Am1"]}} (Listas de strings).
+        - Gráficos de TABELA ("barras", "linha", "dispersao"): {{"eixo_x": "NOME_COL_X", "eixo_y": "NOME_COL_Y"}} (Y numérico).
+        - Gráficos de PIZZA de TABELA: {{"categorias": "NOME_COL_CAT", "valores": "NOME_COL_VAL_NUM"}} (Valores numéricos).
+        - Gráficos com DADOS EXTRAÍDOS DO TEXTO ("barras", "pizza", etc.): {{"dados": [{{"NomeEixoX": "CatA", "NomeEixoY": ValNumA}}, ...], "eixo_x": "NomeEixoX", "eixo_y": "NomeEixoY"}} (Valores DEVEM ser numéricos).
+        - "grafico_barras_agrupadas": Se de TABELA: {{"eixo_x": "COL_PRINCIPAL", "eixo_y": "COL_VALOR_NUM", "cor_agrupamento": "COL_SUB_CAT"}}. Se DADOS EXTRAÍDOS: {{"dados": [{{"CatPrincipal": "A", "SubCat": "X", "Valor": 10}}, ...], "eixo_x": "CatPrincipal", "eixo_y": "Valor", "cor_agrupamento": "SubCat"}}.
+        
+        INSTRUÇÕES CRÍTICAS:
+        1.  NOMES DE COLUNAS: Para gráficos de TABELA, use os NOMES EXATOS das colunas.
+        2.  DADOS NUMÉRICOS: Se coluna de valor de TABELA não for numérica, NÃO sugira gráfico que precise de número para ela, A MENOS que extraia valor numérico dela (ex: '70%' -> 70.0; '70% - 86%' -> 70.0). Se extrair do texto, coloque em "dados", garanta valores numéricos.
+        3.  COBERTURA GEOGRÁFICA (Player, Cidades): Se lista, sugira "tabela_dados" com "dados" nos "parametros" e "colunas_titulo". Não "mapa".
+        4.  SWOT: Se tabela compara SWOTs, gere "lista_swot" INDIVIDUAL por player.
+        Retorne APENAS a lista JSON válida.
+        """
         with st.spinner("🤖 Gemini analisando..."):
+            st.text_area("Debug: Prompt ENVIADO ao Gemini (para erro 400)", prompt, height=300) # DESCOMENTADO PARA DEBUG
             response = model.generate_content(prompt)
         cleaned_text = response.text.strip().lstrip("```json").rstrip("```").strip()
+        st.text_area("Debug: Resposta BRUTA do Gemini (para erro 400)", cleaned_text, height=200) # DESCOMENTADO PARA DEBUG
         sugestoes = json.loads(cleaned_text)
         if isinstance(sugestoes, list) and all(isinstance(item, dict) for item in sugestoes): st.success(f"{len(sugestoes)} sugestões!"); return sugestoes
         st.error("Resposta Gemini não é lista JSON."); return []
@@ -148,6 +146,7 @@ Retorne APENAS a lista JSON válida.""" # String multilinha fechada corretamente
     except Exception as e: st.error(f"Erro API Gemini: {e}"); st.text(traceback.format_exc()); return []
 
 def render_kpis(kpi_sugestoes):
+    # ... (código da função render_kpis da última versão) ...
     if kpi_sugestoes:
         num_kpis = len(kpi_sugestoes); kpi_cols = st.columns(min(num_kpis, 4)) 
         for i, kpi_sug in enumerate(kpi_sugestoes):
@@ -156,7 +155,8 @@ def render_kpis(kpi_sugestoes):
                 st.metric(label=kpi_sug.get("titulo","KPI"),value=str(params.get("valor","N/A")),delta=delta_val if delta_val else None,help=params.get("descricao"))
         st.divider()
 
-def render_swot_card(titulo_completo_swot, swot_data): # Removido card_key_prefix não utilizado
+def render_swot_card(titulo_completo_swot, swot_data):
+    # ... (código da função render_swot_card da última versão) ...
     st.subheader(f"{titulo_completo_swot}") 
     col1, col2 = st.columns(2)
     swot_map = {"forcas": ("Forças 💪", col1), "fraquezas": ("Fraquezas 📉", col1), 
@@ -169,10 +169,11 @@ def render_swot_card(titulo_completo_swot, swot_data): # Removido card_key_prefi
                 points_swot_render = ["N/A (formato de dados incorreto)"]
             if not points_swot_render: points_swot_render = ["N/A"] 
             for item_swot_render in points_swot_render: 
-                st.markdown(f"<div style='margin-bottom: 5px;'>- {item_swot_render}</div>", unsafe_allow_html=True) # Removida a 'key'
+                st.markdown(f"<div style='margin-bottom: 5px;'>- {item_swot_render}</div>", unsafe_allow_html=True)
     st.markdown("<hr style='margin-top: 10px; margin-bottom: 20px;'>", unsafe_allow_html=True)
 
 def render_plotly_chart(item_config, df_plot_input):
+    # ... (código da função render_plotly_chart da última versão) ...
     if df_plot_input is None:
         st.warning(f"Dados não disponíveis para o gráfico '{item_config.get('titulo', 'Sem Título')}'.")
         return False
@@ -219,12 +220,12 @@ st.sidebar.title("✨ Navegação"); pagina_opcoes_sidebar = ["Dashboard Princip
 st.session_state.pagina_selecionada = st.sidebar.radio(
     "Selecione:", pagina_opcoes_sidebar, 
     index=pagina_opcoes_sidebar.index(st.session_state.pagina_selecionada), 
-    key="nav_radio_key_gen_final_v9" 
+    key="nav_radio_key_gen_final_v10" # Chaves únicas para widgets
 )
-st.sidebar.divider(); uploaded_file_sidebar = st.sidebar.file_uploader("Selecione DOCX", type="docx", key="uploader_sidebar_key_gen_final_v9")
+st.sidebar.divider(); uploaded_file_sidebar = st.sidebar.file_uploader("Selecione DOCX", type="docx", key="uploader_sidebar_key_gen_final_v10")
 st.session_state.debug_checkbox_key = st.sidebar.checkbox("Mostrar Informações de Depuração", 
                                     value=st.session_state.debug_checkbox_key, 
-                                    key="debug_cb_sidebar_key_gen_final_v9") 
+                                    key="debug_cb_sidebar_key_gen_final_v10") 
 
 if uploaded_file_sidebar:
     if st.session_state.nome_arquivo_atual != uploaded_file_sidebar.name: 
@@ -249,7 +250,7 @@ if uploaded_file_sidebar:
             for t_info_dbg_main in st.session_state.conteudo_docx["tabelas"]:
                 st.write(f"ID: {t_info_dbg_main['id']}, Nome: {t_info_dbg_main['nome']}")
                 try: st.dataframe(t_info_dbg_main['dataframe'].head().astype(str).fillna("-")) 
-                except: st.text(f"Head:\n{t_info_dbg_main['dataframe'].head().to_string(na_rep='-')}")
+                except Exception: st.text(f"Head:\n{t_info_dbg_main['dataframe'].head().to_string(na_rep='-')}")
                 st.write("Tipos:", t_info_dbg_main['dataframe'].dtypes.to_dict())
 
     if st.session_state.sugestoes_gemini:
@@ -365,15 +366,15 @@ elif st.session_state.pagina_selecionada == "Análise SWOT Detalhada":
 if uploaded_file_sidebar is None and st.session_state.nome_arquivo_atual is not None:
     keys_to_clear_on_remove = list(st.session_state.keys())
     preserved_widget_keys_on_remove = [
-        "nav_radio_key_gen_final_v9", 
-        "uploader_sidebar_key_gen_final_v9", 
-        "debug_cb_sidebar_key_gen_final_v9" 
+        "nav_radio_key_gen_final_v10", 
+        "uploader_sidebar_key_gen_final_v10", 
+        "debug_cb_sidebar_key_gen_final_v10" 
     ] 
     if "sugestoes_gemini" in st.session_state: 
         for sug_key_cfg_clear in st.session_state.sugestoes_gemini:
             s_id_preserve_val_clear = sug_key_cfg_clear.get('id')
             if s_id_preserve_val_clear:
-                preserved_widget_keys_on_remove.extend([f"acc_loop_gen_{s_id_preserve_val_clear}", f"tit_loop_gen_{s_id_preserve_val_clear}"])
+                preserved_widget_keys_on_remove.extend([f"acc_loop_gen_{s_id_preserve_val_clear}", f"tit_loop_gen_{s_id_preserve_val_clear}"]) # Adicionado _gen
             
     for key_cl_remove in keys_to_clear_on_remove:
         if key_cl_remove not in preserved_widget_keys_on_remove:
