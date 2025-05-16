@@ -92,7 +92,7 @@ def analisar_documento_com_gemini(texto_doc, tabelas_info_list):
     api_key = get_gemini_api_key()
     if not api_key: 
         st.warning("Chave API Gemini não configurada. Sugestões da IA desabilitadas.")
-        return [] # Retorna lista vazia para evitar erros subsequentes
+        return [] 
     try:
         genai.configure(api_key=api_key)
         safety_settings = [{"category": c,"threshold": "BLOCK_NONE"} for c in ["HARM_CATEGORY_HARASSMENT","HARM_CATEGORY_HATE_SPEECH","HARM_CATEGORY_SEXUALLY_EXPLICIT","HARM_CATEGORY_DANGEROUS_CONTENT"]]
@@ -212,26 +212,27 @@ def render_plotly_chart(item_config, df_plot_input):
 
 # --- 3. Interface Streamlit Principal ---
 st.set_page_config(layout="wide", page_title="Gemini DOCX Insights GEN") 
+# Padronizado para nome_arquivo_atual e debug_checkbox_key
 for k, dv in [("sugestoes_gemini",[]),("config_sugestoes",{}),("conteudo_docx",{"texto":"","tabelas":[]}),
-              ("nome_arquivo_atual",None),("debug_checkbox_key",False),("pagina_selecionada","Dashboard Principal")]: # Padronizado para nome_arquivo_atual e debug_checkbox_key
+              ("nome_arquivo_atual",None),("debug_checkbox_key",False),("pagina_selecionada","Dashboard Principal")]:
     st.session_state.setdefault(k, dv)
 
 st.sidebar.title("✨ Navegação"); pagina_opcoes_sidebar = ["Dashboard Principal", "Análise SWOT Detalhada"]
 st.session_state.pagina_selecionada = st.sidebar.radio(
     "Selecione:", pagina_opcoes_sidebar, 
     index=pagina_opcoes_sidebar.index(st.session_state.pagina_selecionada), 
-    key="nav_radio_key_gen_final" 
+    key="nav_radio_key_gen_final_v8" 
 )
-st.sidebar.divider(); uploaded_file_sidebar = st.sidebar.file_uploader("Selecione DOCX", type="docx", key="uploader_sidebar_key_gen_final")
+st.sidebar.divider(); uploaded_file_sidebar = st.sidebar.file_uploader("Selecione DOCX", type="docx", key="uploader_sidebar_key_gen_final_v8")
 st.session_state.debug_checkbox_key = st.sidebar.checkbox("Mostrar Informações de Depuração", 
                                     value=st.session_state.debug_checkbox_key, 
-                                    key="debug_cb_sidebar_key_gen_final") 
+                                    key="debug_cb_sidebar_key_gen_final_v8") 
 
 if uploaded_file_sidebar:
     if st.session_state.nome_arquivo_atual != uploaded_file_sidebar.name: 
         with st.spinner("Processando novo documento..."):
             st.session_state.sugestoes_gemini, st.session_state.config_sugestoes = [], {}
-            st.session_state.nome_arquivo_atual = uploaded_file_sidebar.name # Usa a chave padronizada
+            st.session_state.nome_arquivo_atual = uploaded_file_sidebar.name
             texto_doc_main, tabelas_doc_main = extrair_conteudo_docx(uploaded_file_sidebar)
             st.session_state.conteudo_docx = {"texto": texto_doc_main, "tabelas": tabelas_doc_main}
             if texto_doc_main or tabelas_doc_main:
@@ -287,7 +288,7 @@ if st.session_state.pagina_selecionada == "Dashboard Principal":
                 st.json({"Outros Elementos (Configurados e Aceitos)": outros_render}, expanded=False)
         
         elementos_renderizados_dash = 0 
-        col_idx_dash = 0 # Inicializado aqui
+        col_idx_dash = 0 # INICIALIZADO AQUI
 
         if outros_render:
             item_cols_main_dash = st.columns(2)
@@ -363,12 +364,12 @@ elif st.session_state.pagina_selecionada == "Análise SWOT Detalhada":
             for swot_item_render_page in swot_sugs_page_render:
                 render_swot_card(swot_item_render_page.get("titulo","SWOT"),swot_item_render_page.get("parametros",{}), card_key_prefix=swot_item_render_page.get("id","swot_pg_def"))
 
-if uploaded_file_sidebar is None and st.session_state.nome_arquivo_atual is not None:
+if uploaded_file_sidebar is None and st.session_state.nome_arquivo_atual is not None: # CORRIGIDO para nome_arquivo_atual
     keys_to_clear_on_remove = list(st.session_state.keys())
     preserved_widget_keys_on_remove = [
-        "nav_radio_key_gen_final", 
-        "uploader_sidebar_key_gen_final", 
-        "debug_cb_sidebar_key_gen_final" 
+        "nav_radio_key_gen_final_v8", 
+        "uploader_sidebar_key_gen_final_v8", 
+        "debug_cb_sidebar_key_gen_final_v8" 
     ] 
     if "sugestoes_gemini" in st.session_state: 
         for sug_key_cfg_clear in st.session_state.sugestoes_gemini:
@@ -382,7 +383,8 @@ if uploaded_file_sidebar is None and st.session_state.nome_arquivo_atual is not 
     
     for k_reinit_main, dv_reinit_main in [("sugestoes_gemini",[]),("config_sugestoes",{}),
                                 ("conteudo_docx",{"texto":"","tabelas":[]}),
-                                ("nome_arquivo_atual",None),("debug_checkbox_key",False), 
+                                ("nome_arquivo_atual",None), # CORRIGIDO para nome_arquivo_atual
+                                ("debug_checkbox_key",False), 
                                 ("pagina_selecionada","Dashboard Principal")]:
         st.session_state.setdefault(k_reinit_main, dv_reinit_main)
     st.rerun() # CORRIGIDO de st.experimental_rerun()
