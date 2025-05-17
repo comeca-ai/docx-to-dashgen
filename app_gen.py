@@ -3,16 +3,30 @@ from docx import Document
 import pandas as pd
 import plotly.express as px
 import google.generativeai as genai
+import openai
+import anthropic
 import json
 import os
 import traceback
-import re 
+import re
 
 # --- 1. Configuração da Chave da API do Gemini ---
 def get_gemini_api_key():
     try: return st.secrets["GOOGLE_API_KEY"]
-    except (FileNotFoundError, KeyError): 
+    except (FileNotFoundError, KeyError):
         api_key = os.environ.get("GOOGLE_API_KEY")
+        return api_key if api_key else None
+
+def get_openai_api_key():
+    try: return st.secrets["OPENAI_API_KEY"]
+    except (FileNotFoundError, KeyError):
+        api_key = os.environ.get("OPENAI_API_KEY")
+        return api_key if api_key else None
+
+def get_claude_api_key():
+    try: return st.secrets["ANTHROPIC_API_KEY"]
+    except (FileNotFoundError, KeyError):
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
         return api_key if api_key else None
 
 # --- 2. Funções de Processamento do Documento e Interação com Gemini ---
@@ -84,89 +98,110 @@ def extrair_conteudo_docx(uploaded_file):
                 except Exception as e_df_proc:
                     st.warning(f"Não foi possível processar DataFrame para tabela '{nome_tabela}': {e_df_proc}")
         return "\n\n".join(textos), tabelas_data
-    except Exception as e_doc_read: 
+    except Exception as e_doc_read:
         st.error(f"Erro crítico ao ler DOCX: {e_doc_read}")
         return "", []
 
-def analisar_documento_com_gemini(texto_doc, tabelas_info_list, show_debug_areas=False): # Adicionado show_debug_areas
-    api_key = get_gemini_api_key()
-    if not api_key: 
-        st.warning("Chave API Gemini não configurada. Sugestões da IA desabilitadas.")
-        return [] 
+def analisar_documento(texto_doc, tabelas_info_list, provider="Gemini", show_debug_areas=False):
+    """Gera sugestões de visualizações usando o provedor de LLM escolhido."""
+    tabelas_prompt_str = ""
+    tabelas_para_prompt = tabelas_info_list[:1]
+    for t_info in tabelas_para_prompt:
+        df, nome_t, id_t = t_info["dataframe"], t_info["nome"], t_info["id"]
+        sample_df = df.head(1).iloc[:, :min(2, len(df.columns))]
+        try:
+            md_table = sample_df.to_markdown(index=False)
+        except Exception:
+            md_table = sample_df.to_string(index=False)
+        colunas_para_mostrar_tipos = df.columns.tolist()[:min(3, len(df.columns))]
+        col_types_list = [f"'{col}' (tipo: {str(df[col].dtype)})" for col in colunas_para_mostrar_tipos]
+        col_types_str = ", ".join(col_types_list)
+        tabelas_prompt_str += f"\n--- Tabela '{nome_t}' (ID: {id_t}) ---\nColunas e tipos (amostra): {col_types_str}\nAmostra dados:\n{md_table}\n"
+
+    text_limit = 5000
+    prompt_text = texto_doc[:text_limit] + ("\n[TEXTO TRUNCADO...]" if len(texto_doc) > text_limit else "")
+    prompt = f"""
+    Você é um assistente de análise de dados. Analise o texto e as tabelas.
+    [TEXTO]{prompt_text}[FIM TEXTO]
+    [TABELAS]{tabelas_prompt_str}[FIM TABELAS]
+
+    Gere lista JSON de sugestões de visualizações. Objeto DEVE ter: "id", "titulo", "tipo_sugerido" ("kpi", "tabela_dados", "lista_swot", "grafico_barras", "grafico_pizza", "grafico_linha", "grafico_dispersao", "grafico_barras_agrupadas"), "fonte_id" (ID tabela ou "texto_descricao_fonte"), "parametros" (objeto JSON), "justificativa".
+    Para "parametros":
+    - "kpi": {{"valor": "ValorKPI", "delta": "Mudança", "descricao": "Contexto"}}
+    - "tabela_dados": Para TABELA EXISTENTE: {{"id_tabela_original": "ID_Tabela"}}. Para DADOS DO TEXTO: {{"dados": [{{"Coluna1": "ValorA1"}}, ...], "colunas_titulo": ["Título Col1"]}}
+    - "lista_swot": {{"forcas": ["F1"], "fraquezas": ["Fr1"], "oportunidades": ["Op1"], "ameacas": ["Am1"]}} (Listas de strings).
+    - Gráficos de TABELA ("barras", "linha", "dispersao"): {{"eixo_x": "NOME_COL_X", "eixo_y": "NOME_COL_Y"}} (Y numérico).
+    - Gráficos de PIZZA de TABELA: {{"categorias": "NOME_COL_CAT", "valores": "NOME_COL_VAL_NUM"}} (Valores numéricos).
+    - Gráficos com DADOS EXTRAÍDOS DO TEXTO ("barras", "pizza", etc.): {{"dados": [{{"NomeEixoX": "CatA", "NomeEixoY": ValNumA}}, ...], "eixo_x": "NomeEixoX", "eixo_y": "NomeEixoY"}} (Valores DEVEM ser numéricos).
+    - "grafico_barras_agrupadas": Se de TABELA: {{"eixo_x": "COL_PRINCIPAL", "eixo_y": "COL_VALOR_NUM", "cor_agrupamento": "COL_SUB_CAT"}}. Se DADOS EXTRAÍDOS: {{"dados": [{{"CatPrincipal": "A", "SubCat": "X", "Valor": 10}}, ...], "eixo_x": "CatPrincipal", "eixo_y": "Valor", "cor_agrupamento": "SubCat"}}.
+
+    INSTRUÇÕES CRÍTICAS:
+    1.  NOMES DE COLUNAS: Para gráficos de TABELA, use os NOMES EXATOS das colunas.
+    2.  DADOS NUMÉRICOS: Se coluna de valor de TABELA não for numérica, NÃO sugira gráfico que precise de número para ela, A MENOS que extraia valor numérico dela.
+    3.  COBERTURA GEOGRÁFICA (Player, Cidades): Se lista, sugira "tabela_dados" com "dados" nos "parametros" e "colunas_titulo". Não "mapa".
+    4.  SWOT: Se tabela compara SWOTs, gere "lista_swot" INDIVIDUAL por player.
+    Retorne APENAS a lista JSON válida.
+    """
+
+    debug_prefix = provider.lower()
+    if show_debug_areas:
+        st.text_area(f"Debug: Prompt ENVIADO ao {provider}", prompt, height=300, key=f"debug_prompt_{debug_prefix}")
+
     try:
-        genai.configure(api_key=api_key)
-        safety_settings = [{"category": c,"threshold": "BLOCK_NONE"} for c in ["HARM_CATEGORY_HARASSMENT","HARM_CATEGORY_HATE_SPEECH","HARM_CATEGORY_SEXUALLY_EXPLICIT","HARM_CATEGORY_DANGEROUS_CONTENT"]]
-        model = genai.GenerativeModel(model_name="gemini-1.5-flash-latest", safety_settings=safety_settings)
-        
-        tabelas_prompt_str = ""
-        # TESTE: Enviar apenas uma amostra muito pequena de tabelas para reduzir o prompt
-        tabelas_para_prompt = tabelas_info_list[:1] # Apenas a primeira tabela
-        # tabelas_para_prompt = [] # Ou nenhuma tabela para testar só com texto
-
-        for t_info in tabelas_para_prompt: 
-            df, nome_t, id_t = t_info["dataframe"], t_info["nome"], t_info["id"]
-            sample_df = df.head(1).iloc[:, :min(2, len(df.columns))] # Amostra MÍNIMA: 1 linha, até 2 colunas
-            md_table = ""
-            try: md_table = sample_df.to_markdown(index=False)
-            except: md_table = sample_df.to_string(index=False) 
-            
-            colunas_para_mostrar_tipos = df.columns.tolist()[:min(3, len(df.columns))] # Tipos de até 3 colunas
-            col_types_list = [f"'{col_name_prompt}' (tipo: {str(df[col_name_prompt].dtype)})" for col_name_prompt in colunas_para_mostrar_tipos]
-            col_types_str = ", ".join(col_types_list)
-            
-            tabelas_prompt_str += f"\n--- Tabela '{nome_t}' (ID: {id_t}) ---\nColunas e tipos (amostra): {col_types_str}\nAmostra dados:\n{md_table}\n"
-        
-        text_limit = 5000 # LIMITE BEM PEQUENO PARA TEXTO
-        prompt_text = texto_doc[:text_limit] + ("\n[TEXTO TRUNCADO...]" if len(texto_doc) > text_limit else "")
-        # Para testar SÓ AS INSTRUÇÕES:
-        # prompt_text = "Texto de exemplo curto sobre vendas de carros."
-        # tabelas_prompt_str = "---\nTabela Carros (ID:car_tab_1)\nColunas e tipos: 'Modelo' (object), 'Vendas_2024' (int64)\nAmostra:\n| Modelo   |   Vendas_2024 |\n|:----------|---------:|\n| Modelo X |      150 |\n---"
-
-        prompt = f"""
-        Você é um assistente de análise de dados. Analise o texto e as tabelas.
-        [TEXTO]{prompt_text}[FIM TEXTO]
-        [TABELAS]{tabelas_prompt_str}[FIM TABELAS]
-
-        Gere lista JSON de sugestões de visualizações. Objeto DEVE ter: "id", "titulo", "tipo_sugerido" ("kpi", "tabela_dados", "lista_swot", "grafico_barras", "grafico_pizza", "grafico_linha", "grafico_dispersao", "grafico_barras_agrupadas"), "fonte_id" (ID tabela ou "texto_descricao_fonte"), "parametros" (objeto JSON), "justificativa".
-        Para "parametros":
-        - "kpi": {{"valor": "ValorKPI", "delta": "Mudança", "descricao": "Contexto"}}
-        - "tabela_dados": Para TABELA EXISTENTE: {{"id_tabela_original": "ID_Tabela"}}. Para DADOS DO TEXTO: {{"dados": [{{"Coluna1": "ValorA1"}}, ...], "colunas_titulo": ["Título Col1"]}}
-        - "lista_swot": {{"forcas": ["F1"], "fraquezas": ["Fr1"], "oportunidades": ["Op1"], "ameacas": ["Am1"]}} (Listas de strings).
-        - Gráficos de TABELA ("barras", "linha", "dispersao"): {{"eixo_x": "NOME_COL_X", "eixo_y": "NOME_COL_Y"}} (Y numérico).
-        - Gráficos de PIZZA de TABELA: {{"categorias": "NOME_COL_CAT", "valores": "NOME_COL_VAL_NUM"}} (Valores numéricos).
-        - Gráficos com DADOS EXTRAÍDOS DO TEXTO ("barras", "pizza", etc.): {{"dados": [{{"NomeEixoX": "CatA", "NomeEixoY": ValNumA}}, ...], "eixo_x": "NomeEixoX", "eixo_y": "NomeEixoY"}} (Valores DEVEM ser numéricos).
-        - "grafico_barras_agrupadas": Se de TABELA: {{"eixo_x": "COL_PRINCIPAL", "eixo_y": "COL_VALOR_NUM", "cor_agrupamento": "COL_SUB_CAT"}}. Se DADOS EXTRAÍDOS: {{"dados": [{{"CatPrincipal": "A", "SubCat": "X", "Valor": 10}}, ...], "eixo_x": "CatPrincipal", "eixo_y": "Valor", "cor_agrupamento": "SubCat"}}.
-        
-        INSTRUÇÕES CRÍTICAS:
-        1.  NOMES DE COLUNAS: Para gráficos de TABELA, use os NOMES EXATOS das colunas.
-        2.  DADOS NUMÉRICOS: Se coluna de valor de TABELA não for numérica, NÃO sugira gráfico que precise de número para ela, A MENOS que extraia valor numérico dela (ex: '70%' -> 70.0; '70% - 86%' -> 70.0). Se extrair do texto, coloque em "dados", garanta valores numéricos.
-        3.  COBERTURA GEOGRÁFICA (Player, Cidades): Se lista, sugira "tabela_dados" com "dados" nos "parametros" e "colunas_titulo". Não "mapa".
-        4.  SWOT: Se tabela compara SWOTs, gere "lista_swot" INDIVIDUAL por player.
-        Retorne APENAS a lista JSON válida.
-        """
-        if show_debug_areas: # Controla exibição dos text_area de debug
-            st.text_area("Debug: Prompt ENVIADO ao Gemini (para erro 400)", prompt, height=300, key="debug_prompt_gemini")
-        
-        with st.spinner("🤖 Gemini analisando..."):
-            response = model.generate_content(prompt)
-        cleaned_text = response.text.strip().lstrip("```json").rstrip("```").strip()
+        if provider == "Gemini":
+            api_key = get_gemini_api_key()
+            if not api_key:
+                st.warning("Chave API Gemini não configurada. Sugestões da IA desabilitadas.")
+                return []
+            genai.configure(api_key=api_key)
+            safety_settings = [{"category": c, "threshold": "BLOCK_NONE"} for c in [
+                "HARM_CATEGORY_HARASSMENT",
+                "HARM_CATEGORY_HATE_SPEECH",
+                "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                "HARM_CATEGORY_DANGEROUS_CONTENT",
+            ]]
+            model = genai.GenerativeModel(model_name="gemini-1.5-flash-latest", safety_settings=safety_settings)
+            with st.spinner("🤖 Gemini analisando..."):
+                response = model.generate_content(prompt)
+            cleaned_text = response.text.strip().lstrip("```json").rstrip("```").strip()
+        elif provider == "OpenAI":
+            api_key = get_openai_api_key()
+            if not api_key:
+                st.warning("Chave API OpenAI não configurada. Sugestões da IA desabilitadas.")
+                return []
+            client = openai.OpenAI(api_key=api_key)
+            with st.spinner("🤖 OpenAI analisando..."):
+                response = client.chat.completions.create(model="gpt-3.5-turbo", messages=[{"role": "user", "content": prompt}])
+            cleaned_text = response.choices[0].message.content.strip().lstrip("```json").rstrip("```").strip()
+        elif provider == "Claude":
+            api_key = get_claude_api_key()
+            if not api_key:
+                st.warning("Chave API Claude não configurada. Sugestões da IA desabilitadas.")
+                return []
+            client = anthropic.Anthropic(api_key=api_key)
+            with st.spinner("🤖 Claude analisando..."):
+                response = client.messages.create(model="claude-3-haiku-20240307", messages=[{"role": "user", "content": prompt}], max_tokens=1024)
+            cleaned_text = "".join(block.text for block in response.content if hasattr(block, "text")).strip().lstrip("```json").rstrip("```").strip()
+        else:
+            st.error(f"Provedor LLM '{provider}' não suportado.")
+            return []
 
         if show_debug_areas:
-            st.text_area("Debug: Resposta BRUTA do Gemini (para erro 400)", cleaned_text, height=200, key="debug_response_gemini")
-        
+            st.text_area(f"Debug: Resposta BRUTA do {provider}", cleaned_text, height=200, key=f"debug_response_{debug_prefix}")
+
         sugestoes = json.loads(cleaned_text)
         if isinstance(sugestoes, list) and all(isinstance(item, dict) for item in sugestoes):
-             st.success(f"{len(sugestoes)} sugestões recebidas do Gemini!")
-             return sugestoes
-        st.error("Resposta do Gemini não é uma lista JSON válida como esperado."); return []
-    except json.JSONDecodeError as e: 
-        st.error(f"Erro ao decodificar JSON da resposta do Gemini: {e}")
-        if 'response' in locals() and hasattr(response, 'text'): st.code(response.text, language="text")
+            st.success(f"{len(sugestoes)} sugestões recebidas do {provider}!")
+            return sugestoes
+        st.error(f"Resposta do {provider} não é uma lista JSON válida como esperado.")
         return []
-    except Exception as e: 
-        st.error(f"Erro na comunicação com Gemini: {e}")
-        # st.text(traceback.format_exc()) # Descomentar para debug MUITO detalhado do erro da API
+    except json.JSONDecodeError as e:
+        st.error(f"Erro ao decodificar JSON da resposta do {provider}: {e}")
         return []
+    except Exception as e:
+        st.error(f"Erro na comunicação com {provider}: {e}")
+        return []
+
 
 # --- Funções de Renderização ---
 def render_kpis(kpi_sugestoes):
@@ -178,8 +213,8 @@ def render_kpis(kpi_sugestoes):
                 st.metric(label=kpi_sug.get("titulo","KPI"),value=str(params.get("valor","N/A")),delta=delta_val if delta_val else None,help=params.get("descricao"))
         st.divider()
 
-def render_swot_card(titulo_completo_swot, swot_data):
-    st.subheader(f"{titulo_completo_swot}") 
+def render_swot_card(titulo_completo_swot, swot_data, card_key_prefix=None):
+    st.subheader(f"{titulo_completo_swot}")
     col1, col2 = st.columns(2)
     swot_map = {"forcas": ("Forças 💪", col1), "fraquezas": ("Fraquezas 📉", col1), 
                 "oportunidades": ("Oportunidades 🚀", col2), "ameacas": ("Ameaças ⚠️", col2)}
@@ -232,9 +267,10 @@ def render_plotly_chart(item_config, df_plot_input):
     return False
 
 # --- 3. Interface Streamlit Principal ---
-st.set_page_config(layout="wide", page_title="Gemini DOCX Insights GEN") 
+st.set_page_config(layout="wide", page_title="LLM DOCX Insights GEN")
 for k, dv in [("sugestoes_gemini",[]),("config_sugestoes",{}),("conteudo_docx",{"texto":"","tabelas":[]}),
-              ("nome_arquivo_atual",None),("debug_checkbox_key",False),("pagina_selecionada","Dashboard Principal")]:
+              ("nome_arquivo_atual",None),("debug_checkbox_key",False),("pagina_selecionada","Dashboard Principal"),
+              ("llm_provider","Gemini")]:
     st.session_state.setdefault(k, dv)
 
 st.sidebar.title("✨ Navegação"); pagina_opcoes_sidebar = ["Dashboard Principal", "Análise SWOT Detalhada"]
@@ -245,10 +281,17 @@ st.session_state.pagina_selecionada = st.sidebar.radio(
 )
 st.sidebar.divider(); uploaded_file_sidebar = st.sidebar.file_uploader("Selecione DOCX", type="docx", key="uploader_sidebar_key_gen_final_v12")
 # O valor do checkbox de debug é controlado pelo session_state
-show_debug_info_value = st.sidebar.checkbox("Mostrar Informações de Depuração", 
-                                    value=st.session_state.debug_checkbox_key, 
-                                    key="debug_cb_sidebar_key_gen_final_v12") 
+show_debug_info_value = st.sidebar.checkbox("Mostrar Informações de Depuração",
+                                    value=st.session_state.debug_checkbox_key,
+                                    key="debug_cb_sidebar_key_gen_final_v12")
 st.session_state.debug_checkbox_key = show_debug_info_value
+llm_options = ["Gemini", "Claude", "OpenAI"]
+st.session_state.llm_provider = st.sidebar.selectbox(
+    "Modelo de IA",
+    llm_options,
+    index=llm_options.index(st.session_state.llm_provider),
+    key="llm_select_key_gen_final_v12"
+)
 
 
 if uploaded_file_sidebar:
@@ -260,7 +303,12 @@ if uploaded_file_sidebar:
             st.session_state.conteudo_docx = {"texto": texto_doc_main, "tabelas": tabelas_doc_main}
             if texto_doc_main or tabelas_doc_main:
                 # Passa o estado do checkbox de debug para a função da LLM
-                sugestoes_main = analisar_documento_com_gemini(texto_doc_main, tabelas_doc_main, show_debug_areas=st.session_state.debug_checkbox_key)
+                sugestoes_main = analisar_documento(
+                    texto_doc_main,
+                    tabelas_doc_main,
+                    provider=st.session_state.llm_provider,
+                    show_debug_areas=st.session_state.debug_checkbox_key
+                )
                 st.session_state.sugestoes_gemini = sugestoes_main
                 temp_config_init_main = {}
                 for i_init_main,s_init_main in enumerate(sugestoes_main): 
@@ -392,9 +440,10 @@ if uploaded_file_sidebar is None and st.session_state.nome_arquivo_atual is not 
     keys_to_clear_on_remove = list(st.session_state.keys())
     preserved_widget_keys_on_remove = [
         "nav_radio_key_gen_final_v12", # Atualize para as chaves únicas usadas
-        "uploader_sidebar_key_gen_final_v12", 
-        "debug_cb_sidebar_key_gen_final_v12" 
-    ] 
+        "uploader_sidebar_key_gen_final_v12",
+        "debug_cb_sidebar_key_gen_final_v12",
+        "llm_select_key_gen_final_v12"
+    ]
     if "sugestoes_gemini" in st.session_state: 
         for sug_key_cfg_clear in st.session_state.sugestoes_gemini: # Itera sobre cópia ou usa .get
             s_id_preserve_val_clear = sug_key_cfg_clear.get('id')
@@ -409,7 +458,8 @@ if uploaded_file_sidebar is None and st.session_state.nome_arquivo_atual is not 
     for k_reinit_main, dv_reinit_main in [("sugestoes_gemini",[]),("config_sugestoes",{}),
                                 ("conteudo_docx",{"texto":"","tabelas":[]}),
                                 ("nome_arquivo_atual",None),
-                                ("debug_checkbox_key",False), 
-                                ("pagina_selecionada","Dashboard Principal")]:
+                                ("debug_checkbox_key",False),
+                                ("pagina_selecionada","Dashboard Principal"),
+                                ("llm_provider","Gemini")]:
         st.session_state.setdefault(k_reinit_main, dv_reinit_main)
     st.rerun()
