@@ -21,7 +21,8 @@ def parse_value_for_numeric(val_str_in):
     text = str(val_str_in).strip()
     is_negative_paren = text.startswith('(') and text.endswith(')')
     if is_negative_paren: text = text[1:-1]
-    text_num_part = re.sub(r'[R$\s%€¥£]', '', text) 
+    # Remove símbolos de moeda e espaços para facilitar a extração numérica
+    text_num_part = re.sub('[R$\\s%€¥£]', '', text)
     if ',' in text_num_part and '.' in text_num_part:
         if text_num_part.rfind('.') < text_num_part.rfind(','): text_num_part = text_num_part.replace('.', '') 
         text_num_part = text_num_part.replace(',', '.') 
@@ -178,8 +179,8 @@ def render_kpis(kpi_sugestoes):
                 st.metric(label=kpi_sug.get("titulo","KPI"),value=str(params.get("valor","N/A")),delta=delta_val if delta_val else None,help=params.get("descricao"))
         st.divider()
 
-def render_swot_card(titulo_completo_swot, swot_data):
-    st.subheader(f"{titulo_completo_swot}") 
+def render_swot_card(titulo_completo_swot, swot_data, card_key_prefix=None):
+    st.subheader(f"{titulo_completo_swot}")
     col1, col2 = st.columns(2)
     swot_map = {"forcas": ("Forças 💪", col1), "fraquezas": ("Fraquezas 📉", col1), 
                 "oportunidades": ("Oportunidades 🚀", col2), "ameacas": ("Ameaças ⚠️", col2)}
