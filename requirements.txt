@@ -3,5 +3,7 @@ pandas
 python-docx
 plotly
 google-generativeai
+openai
+anthropic
 tabulate
-openpyxl 
+openpyxl
