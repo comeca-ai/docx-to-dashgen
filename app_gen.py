@@ -35,7 +35,8 @@ def parse_value_for_numeric(val_str_in):
     text = str(val_str_in).strip()
     is_negative_paren = text.startswith('(') and text.endswith(')')
     if is_negative_paren: text = text[1:-1]
-    text_num_part = re.sub(r'[R$\s%€¥£]', '', text) 
+    # Remove símbolos de moeda e espaços para facilitar a extração numérica
+    text_num_part = re.sub('[R$\\s%€¥£]', '', text)
     if ',' in text_num_part and '.' in text_num_part:
         if text_num_part.rfind('.') < text_num_part.rfind(','): text_num_part = text_num_part.replace('.', '') 
         text_num_part = text_num_part.replace(',', '.') 
